@@ -1,11 +1,26 @@
 "use client";
+import { baseSepolia } from "viem/chains";
+import { useState, useEffect } from "react";
+import { useAccount, useWalletClient, usePublicClient, useSwitchChain } from "wagmi";
+import { LAUNCH_TOKEN_ABI, LAUNCH_TOKEN_BYTECODE } from "@/lib/contracts/LaunchToken"
 
-import { useState } from "react";
 import Header from "@/components/Header";
 
 type LaunchStatus = "idle" | "validating" | "ready" | "deploying" | "deployed" | "failed";
 
 export default function LaunchPage() {
+  const { address, isConnected } = useAccount();
+  const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
+  const [isDeploying, setIsDeploying] = useState(false);
+  const { switchChain } = useSwitchChain()
+
+  
+  const [deployResult, setDeployResult] = useState<null | {
+    contractAddress: string,
+    txHash: string,
+  }>(null);
+
   const [tokenName, setTokenName] = useState("");
   const [tokenSymbol, setTokenSymbol] = useState("");
   const [initialSupply, setInitialSupply] = useState("");
@@ -16,11 +31,13 @@ export default function LaunchPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<LaunchStatus>("idle");
-
-  const [isDeploying, setIsDeploying] = useState(false);
-  const [deployTxHash, setDeployTxHash] = useState("");
-  const [deployedTokenAddress, setDeployedTokenAddress] = useState("");
-
+  
+  console.log("=== RENDER ===");
+  console.log("isConnected:", isConnected);
+  console.log("address:", address);
+  console.log("walletClient:", walletClient);
+  console.log("publicClient:", publicClient);
+  
   const [submittedData, setSubmittedData] = useState<null | {
     deploymentConfig: {
       tokenName: string;
@@ -32,6 +49,147 @@ export default function LaunchPage() {
       description: string;
     };
   }>(null);
+
+  const deployButtonState = getDeployButtonState();
+
+  useEffect(() => {
+    if (!walletClient) return;
+  
+    if (walletClient.chain?.id !== baseSepolia.id) {
+      switchChain({ chainId: baseSepolia.id });
+    }
+  }, [walletClient, switchChain]);
+
+  function getDeployButtonState() {
+    if (!isConnected) {
+      return {
+        disabled: true,
+        label: "Connect wallet to deploy",
+        hint: "Please connect your wallet first.",
+      };
+    }
+  
+    if (!submittedData) {
+      return {
+        disabled: true,
+        label: "Validate form first",
+        hint: "Complete validation before deploying the token.",
+      };
+    }
+  
+    if (isDeploying) {
+      return {
+        disabled: true,
+        label: "Deploying...",
+        hint: "Transaction is being processed onchain.",
+      };
+    }
+
+    if (!walletClient) {
+      return {
+        disabled: true,
+        label: "Preparing wallet...",
+        hint: "Waiting for wallet connection to be fully ready.",
+      };
+    }
+  
+    return {
+      disabled: false,
+      label: "Deploy ERC20 Token",
+      hint: "Ready to deploy your ERC20 token on Base Sepolia.",
+    };
+  }
+
+  async function handleDeployToken() {
+    try {
+      setError("");
+      setSuccessMessage("");
+      setDeployResult(null);
+  
+      if (!isConnected || !address) {
+        setError("Please connect your wallet first.");
+        setStatus("failed");
+        return;
+      }
+  
+      if (!walletClient) {
+        setError("Wallet is still initializing. Please wait a moment and try again.");
+        setStatus("failed");
+        return;
+      }
+  
+      if (!publicClient) {
+        setError("Public client is not ready.");
+        setStatus("failed");
+        return;
+      }
+  
+      if (!submittedData) {
+        setError("Please validate the launch form first.");
+        setStatus("failed");
+        return;
+      }
+  
+      const { tokenName, tokenSymbol, initialSupply } = submittedData.deploymentConfig;
+  
+      if (!/^\d+$/.test(initialSupply.trim())) {
+        setError("Initial Supply must be a whole number.");
+        setStatus("failed");
+        return;
+      }
+  
+      const normalizedSupply = BigInt(initialSupply);
+  
+      if (normalizedSupply <= 0n) {
+        setError("Initial Supply must be greater than 0.");
+        setStatus("failed");
+        return;
+      }
+  
+      setIsDeploying(true);
+      setStatus("deploying");
+
+      if (walletClient.chain?.id !== baseSepolia.id) {
+        setError("Please switch to Base Sepolia network.");
+        setStatus("failed");
+        setIsDeploying(false);
+        return;
+      }
+  
+      const hash = await walletClient.deployContract({
+        abi: LAUNCH_TOKEN_ABI,
+        bytecode: LAUNCH_TOKEN_BYTECODE as `0x${string}`,
+        args: [tokenName, tokenSymbol, normalizedSupply],
+        account: address,
+        chain: walletClient.chain,
+      });
+  
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  
+      if (!receipt.contractAddress) {
+        throw new Error("Contract address not found in receipt.");
+      }
+  
+      setDeployResult({
+        contractAddress: receipt.contractAddress,
+        txHash: hash,
+      });
+  
+      setSuccessMessage("ERC20 token deployed successfully.");
+      setStatus("deployed");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to deploy ERC20 token.";
+      if (err instanceof Error && err.message.includes("User rejected")) {
+        setError("Transaction rejected by user.");
+      } else {
+        setError(message);
+      }
+      setStatus("failed");
+    } finally {
+      setIsDeploying(false);
+    }
+  }
 
   async function handleLaunchPreview() {
     setError("");
@@ -71,15 +229,23 @@ export default function LaunchPage() {
       return;
     }
 
-    const supplyNumber = Number(initialSupply);
-    const ethAmountNumber = Number(initialEthAmount);
-
-    if (Number.isNaN(supplyNumber) || supplyNumber <= 0) {
-      setError("Initial Supply must be a number greater than 0.");
+    if (!/^\d+$/.test(initialSupply.trim())) {
+      setError("Initial Supply must be a whole number.");
       setStatus("idle");
       setIsSubmitting(false);
       return;
     }
+    
+    const normalizedSupply = BigInt(initialSupply.trim());
+    
+    if (normalizedSupply <= BigInt(0)) {
+      setError("Initial Supply must be greater than 0.");
+      setStatus("idle");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const ethAmountNumber = Number(initialEthAmount);
 
     if (Number.isNaN(ethAmountNumber) || ethAmountNumber <= 0) {
       setError("Initial ETH Amount must be a number greater than 0.");
@@ -117,18 +283,42 @@ export default function LaunchPage() {
     if (status === "idle") {
       return "border-white/10 bg-black/30";
     }
-
+  
     if (status === "validating") {
       if (step === 1) {
         return "border-yellow-500/40 bg-yellow-500/10";
       }
       return "border-white/10 bg-black/30";
     }
-
+  
     if (status === "ready") {
-      return "border-emerald-500/40 bg-emerald-500/10";
+      if (step === 1) {
+        return "border-emerald-500/40 bg-emerald-500/10";
+      }
+      return "border-white/10 bg-black/30";
     }
-
+  
+    if (status === "deploying") {
+      if (step === 1) {
+        return "border-yellow-500/40 bg-yellow-500/10";
+      }
+      return "border-white/10 bg-black/30";
+    }
+  
+    if (status === "deployed") {
+      if (step === 1) {
+        return "border-emerald-500/40 bg-emerald-500/10";
+      }
+      return "border-white/10 bg-black/30";
+    }
+  
+    if (status === "failed") {
+      if (step === 1) {
+        return "border-red-500/40 bg-red-500/10";
+      }
+      return "border-white/10 bg-black/30";
+    }
+  
     return "border-white/10 bg-black/30";
   }
 
@@ -136,6 +326,9 @@ export default function LaunchPage() {
     if (status === "idle") return "Idle";
     if (status === "validating") return "Validating";
     if (status === "ready") return "Ready";
+    if (status === "deploying") return "Deploying";
+    if (status === "deployed") return "Deployed";
+    if (status === "failed") return "Failed";
     return "Unknown";
   }
 
@@ -256,10 +449,11 @@ export default function LaunchPage() {
               </button>
               <button
               type="button"
-              disabled={!submittedData || isDeploying}
+              onClick={handleDeployToken}
+              disabled={deployButtonState.disabled}
               className="w-full rounded-xl border border-white/20 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
               >
-              {isDeploying ? "Deploying..." : "Deploy ERC20 Token"}
+              {deployButtonState.label}
               </button>
             </div>
           </div>
@@ -351,6 +545,19 @@ export default function LaunchPage() {
               <p className="text-sm text-gray-500">Description</p>
               <p className="mt-2 text-sm text-gray-300">
                 {submittedData?.launchConfig?.description || "Not submitted yet"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/30 p-4">
+              <p className="text-sm text-gray-500">Token Address</p>
+              <p className="mt-2 break-all text-sm text-gray-300">
+                {deployResult?.contractAddress || "Not deployed yet"}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-black/30 p-4">
+              <p className="text-sm text-gray-500">Deployment Tx Hash</p>
+              <p className="mt-2 break-all text-sm text-gray-300">
+                {deployResult?.txHash || "Not deployed yet"}
               </p>
             </div>
           </div>
