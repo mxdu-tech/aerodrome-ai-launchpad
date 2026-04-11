@@ -1,0 +1,40 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IVotingRewardsFactory",
+  "sourceName": "contracts/aero/interfaces/factories/IVotingRewardsFactory.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_forwarder",
+          "type": "address"
+        },
+        {
+          "internalType": "address[]",
+          "name": "_rewards",
+          "type": "address[]"
+        }
+      ],
+      "name": "createRewards",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "feesVotingReward",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "bribeVotingReward",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

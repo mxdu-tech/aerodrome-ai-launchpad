@@ -1,0 +1,50 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IGaugeFactory",
+  "sourceName": "contracts/aero/interfaces/factories/IGaugeFactory.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_forwarder",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_pool",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_feesVotingReward",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_ve",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "isPool",
+          "type": "bool"
+        }
+      ],
+      "name": "createGauge",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}
