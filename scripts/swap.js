@@ -67,6 +67,12 @@ async function main() {
     }
   ];
 
+  const amounts = await router.getAmountsOut(amountIn, route);
+
+  console.log("Router quote:");
+  console.log("TokenA in:", ethers.formatEther(amounts[0]));
+  console.log("TokenB out:", ethers.formatEther(amounts[1]));
+
   const tx2 = await router.swapExactTokensForTokens(
     amountIn,
     0, // amountOutMin

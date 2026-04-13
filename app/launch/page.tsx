@@ -5,10 +5,24 @@ import { useAccount, useWalletClient, usePublicClient, useSwitchChain } from "wa
 import { LAUNCH_TOKEN_ABI, LAUNCH_TOKEN_BYTECODE } from "@/lib/contracts/LaunchToken"
 
 import Header from "@/components/Header";
+import deployment from "@/deployments/baseSepolia.json";
 
-type LaunchStatus = "idle" | "validating" | "ready" | "deploying" | "deployed" | "failed";
 
 export default function LaunchPage() {
+
+  type LiquidityStatus =
+    | "idle"
+    | "approving"
+    | "adding"
+    | "success"
+    | "error";
+
+  const [liquidityStatus, setLiquidityStatus] = useState<LiquidityStatus>("idle");
+  const [poolAddress, setPoolAddress] = useState<string>("");
+  const [lpBalance, setLpBalance] = useState<string>("");
+
+  type LaunchStatus = "idle" | "validating" | "ready" | "deploying" | "deployed" | "failed";
+
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
@@ -33,10 +47,6 @@ export default function LaunchPage() {
   const [status, setStatus] = useState<LaunchStatus>("idle");
   
   console.log("=== RENDER ===");
-  console.log("isConnected:", isConnected);
-  console.log("address:", address);
-  console.log("walletClient:", walletClient);
-  console.log("publicClient:", publicClient);
   
   const [submittedData, setSubmittedData] = useState<null | {
     deploymentConfig: {
@@ -66,6 +76,14 @@ export default function LaunchPage() {
         disabled: true,
         label: "Connect wallet to deploy",
         hint: "Please connect your wallet first.",
+      };
+    }
+
+    if (deployResult) {
+      return {
+        disabled: true,
+        label: "Token already deployed",
+        hint: "Token has been deployed. Proceed to add liquidity.",
       };
     }
   
@@ -98,6 +116,293 @@ export default function LaunchPage() {
       label: "Deploy ERC20 Token",
       hint: "Ready to deploy your ERC20 token on Base Sepolia.",
     };
+  }
+
+  async function handleAddLiquidity() {
+    if (liquidityStatus === "approving" || liquidityStatus === "adding") return;
+  
+    try {
+      setError("");
+      setSuccessMessage("");
+      setPoolAddress("");
+      setLpBalance("");
+  
+      if (!deployResult?.contractAddress) {
+        throw new Error("Token not deployed yet.");
+      }
+  
+      if (!walletClient || !publicClient || !address) {
+        throw new Error("Wallet not ready.");
+      }
+  
+      const tokenAddress = deployResult.contractAddress as `0x${string}`;
+      const routerAddress = deployment.Router as `0x${string}`;
+      const factoryAddress = deployment.Factory as `0x${string}`;
+      const wethAddress = deployment.WETH as `0x${string}`;
+  
+      if (!submittedData) throw new Error("Form data not found.");
+      const amountToken = BigInt(submittedData.deploymentConfig.initialSupply) * BigInt(10) ** BigInt(18);
+      const amountETH = BigInt(Math.floor(Number(submittedData.launchConfig.initialEthAmount) * 1e18));
+        
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
+  
+      console.log("===== ADD LIQUIDITY START =====");
+  
+      // =========================
+      // 1. Check balance & allowance
+      // =========================
+      const erc20Abi = [
+        {
+          name: "balanceOf",
+          type: "function",
+          inputs: [{ name: "account", type: "address" }],
+          outputs: [{ type: "uint256" }],
+          stateMutability: "view",
+        },
+        {
+          name: "allowance",
+          type: "function",
+          inputs: [
+            { name: "owner", type: "address" },
+            { name: "spender", type: "address" },
+          ],
+          outputs: [{ type: "uint256" }],
+          stateMutability: "view",
+        },
+        {
+          name: "approve",
+          type: "function",
+          stateMutability: "nonpayable",
+          inputs: [
+            { name: "spender", type: "address" },
+            { name: "amount", type: "uint256" },
+          ],
+          outputs: [{ type: "bool" }],
+        },
+      ];
+
+      console.log("tokenAddress:", tokenAddress)
+  
+      const balance = await publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [address],
+      }) as bigint;
+  
+      const allowance = await publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address, routerAddress],
+      }) as bigint;
+  
+      console.log("Balance:", balance.toString());
+      console.log("Allowance:", allowance.toString());
+  
+      if (balance < amountToken) {
+        throw new Error("Insufficient token balance");
+      }
+  
+      // =========================
+      // 2. Approve
+      // =========================
+      if (allowance < amountToken) {
+        setLiquidityStatus("approving");
+        console.log("APPROVE token:", tokenAddress)
+        const approveHash = await walletClient.writeContract({
+          address: tokenAddress,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [routerAddress, amountToken],
+          account: address,
+        });
+        console.log("APPROVE token:", tokenAddress)
+  
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+  
+        console.log("Approve done:", approveHash);
+      }
+
+      console.log("Final allowance:",
+        await publicClient.readContract({
+          address: tokenAddress,
+          abi: erc20Abi,
+          functionName: "allowance",
+          args: [address, routerAddress],
+        })
+      );
+
+      const routerWETH = await publicClient.readContract({
+        address: routerAddress,
+        abi: [{
+          name: "weth",
+          type: "function",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ type: "address" }]
+        }],
+        functionName: "weth",
+      });
+      
+      console.log("Router WETH:", routerWETH);
+      console.log("Deployment WETH:", wethAddress);
+  
+      // =========================
+      // 3. Simulate
+      // =========================
+      await new Promise(r => setTimeout(r, 1500));
+
+      const routerAbi = [
+        {
+          name: "addLiquidityETH",
+          type: "function",
+          stateMutability: "payable",
+          inputs: [
+            { name: "token", type: "address" },
+            { name: "stable", type: "bool" },
+            { name: "amountTokenDesired", type: "uint256" },
+            { name: "amountTokenMin", type: "uint256" },
+            { name: "amountETHMin", type: "uint256" },
+            { name: "to", type: "address" },
+            { name: "deadline", type: "uint256" },
+          ],
+          outputs: [
+            { name: "amountToken", type: "uint256" },
+            { name: "amountETH", type: "uint256" },
+            { name: "liquidity", type: "uint256" }
+          ]
+        },
+      ];
+  
+      await publicClient.simulateContract({
+        address: routerAddress,
+        abi: routerAbi,
+        functionName: "addLiquidityETH",
+        args: [
+          tokenAddress,
+          false,
+          amountToken,
+          0,
+          0,
+          address,
+          deadline,
+        ],
+        value: amountETH,
+        account: address,
+      });
+  
+      console.log("Simulation passed");
+  
+      // =========================
+      // 4. Add Liquidity
+      // =========================
+      setLiquidityStatus("adding");
+      console.log("ADD token:", tokenAddress)
+  
+      const hash = await walletClient.writeContract({
+        address: routerAddress,
+        abi: routerAbi,
+        functionName: "addLiquidityETH",
+        args: [
+          tokenAddress,
+          false,
+          amountToken,
+          0,
+          0,
+          address,
+          deadline,
+        ],
+        value: amountETH,
+        account: address,
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+
+      console.log("tx status:", receipt.status);
+      console.log("tx logs count:", receipt.logs.length);
+
+      if (receipt.status === "reverted") {
+        throw new Error("Add liquidity transaction reverted. Pool was not created.");
+      }
+
+  
+      console.log("Liquidity added");
+  
+      // =========================
+      // 5. Get Pool
+      // =========================
+      const factoryAbi = [
+        {
+          name: "getPool",
+          type: "function",
+          inputs: [
+            { name: "tokenA", type: "address" },
+            { name: "tokenB", type: "address" },
+            { name: "stable", type: "bool" },
+          ],
+          outputs: [{ type: "address" }],
+          stateMutability: "view",
+        },
+      ];
+  
+      const [token0, token1] = [tokenAddress, wethAddress].sort((a, b) =>
+        a.toLowerCase() < b.toLowerCase() ? -1 : 1
+      );
+      
+      const pool = await publicClient.readContract({
+        address: factoryAddress,
+        abi: factoryAbi,
+        functionName: "getPool",
+        args: [token0, token1, false],
+      }) as `0x${string}`;
+
+      console.log("token0:", token0);
+      console.log("token1:", token1);
+      console.log("factoryAddress:", factoryAddress);
+      console.log("wethAddress:", wethAddress);
+      console.log("Pool:", pool);
+
+      if (!pool || pool === "0x0000000000000000000000000000000000000000") {
+        throw new Error(`Pool not found. Check factory and token addresses. token0=${token0}, token1=${token1}`);
+      }
+  
+      console.log("Pool:", pool);
+  
+      setPoolAddress(pool as string);
+
+  
+      // =========================
+      // 6. LP balance
+      // =========================
+      console.log("account address", address);
+      const lp = await publicClient.readContract({
+        address: pool,
+        abi: [
+          {
+            name: "balanceOf",
+            type: "function",
+            inputs: [{ name: "account", type: "address" }],
+            outputs: [{ type: "uint256" }],
+            stateMutability: "view",
+          },
+        ],
+        functionName: "balanceOf",
+        args: [address],
+      }) as bigint;
+  
+      console.log("LP Balance:", lp.toString());
+  
+      setLpBalance(lp.toString());
+  
+      setLiquidityStatus("success");
+      setSuccessMessage("Liquidity added successfully");
+    } catch (err: any) {
+      console.error(err);
+      setLiquidityStatus("error");
+      setError(err.message || "Add liquidity failed");
+    }
   }
 
   async function handleDeployToken() {
@@ -140,7 +445,7 @@ export default function LaunchPage() {
   
       const normalizedSupply = BigInt(initialSupply);
   
-      if (normalizedSupply <= 0n) {
+      if (normalizedSupply <= BigInt(0)) {
         setError("Initial Supply must be greater than 0.");
         setStatus("failed");
         return;
@@ -165,6 +470,8 @@ export default function LaunchPage() {
       });
   
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+      
   
       if (!receipt.contractAddress) {
         throw new Error("Contract address not found in receipt.");
@@ -455,6 +762,18 @@ export default function LaunchPage() {
               >
               {deployButtonState.label}
               </button>
+              {status === "deployed" && (
+                <button
+                  onClick={handleAddLiquidity}
+                  disabled={liquidityStatus === "approving" || liquidityStatus === "adding"}
+                  className="w-full rounded-xl border border-blue-500/40 px-6 py-3 text-sm font-semibold text-blue-300 transition hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {liquidityStatus === "approving" && "Approving..."}
+                  {liquidityStatus === "adding" && "Adding Liquidity..."}
+                  {liquidityStatus === "idle" && "Add Liquidity"}
+                  {liquidityStatus === "success" && "Add Again"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -560,6 +879,31 @@ export default function LaunchPage() {
                 {deployResult?.txHash || "Not deployed yet"}
               </p>
             </div>
+
+            {/* Pool Address */}
+            <div className="rounded-xl border border-white/10 bg-black/30 p-4">
+              <p className="text-sm text-gray-500">Pool Address</p>
+              <p className="mt-2 break-all text-sm text-gray-300">
+                {poolAddress || "Not created yet"}
+              </p>
+            </div>
+
+            {/* LP Balance */}
+            <div className="rounded-xl border border-white/10 bg-black/30 p-4">
+              <p className="text-sm text-gray-500">LP Token Balance</p>
+              <p className="mt-2 break-all text-sm text-gray-300">
+                {lpBalance || "0"}
+              </p>
+            </div>
+
+            {/* Liquidity Status */}
+            <div className="rounded-xl border border-white/10 bg-black/30 p-4 md:col-span-2">
+              <p className="text-sm text-gray-500">Liquidity Status</p>
+              <p className="mt-2 text-sm text-gray-300">
+                {liquidityStatus}
+              </p>
+            </div>
+
           </div>
         </div>
       </section>
