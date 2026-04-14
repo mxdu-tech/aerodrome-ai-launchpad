@@ -26,6 +26,13 @@ export default function Home() {
             Launch a Token
           </Link>
 
+          <Link
+            href="/trade"
+            className="rounded-xl bg-green-600 px-6 py-3 text-sm font-medium text-white"
+          >
+            Trade Token
+          </Link>
+
           <a
             href="https://aerodrome.finance/"
             target="_blank"

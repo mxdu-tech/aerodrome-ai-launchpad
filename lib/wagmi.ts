@@ -7,6 +7,10 @@ export const config = createConfig({
     connectors: [
         metaMask({
             debug: true,
+            dapp: {
+                name: "Aerodrome AI Launchpad",
+                url: "http://localhost:3000",
+            },
           }),
         ],
     transports: {
