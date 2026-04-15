@@ -141,15 +141,21 @@ export default function LaunchPage() {
       const wethAddress = deployment.WETH as `0x${string}`;
   
       if (!submittedData) throw new Error("Form data not found.");
-      const amountToken = BigInt(submittedData.deploymentConfig.initialSupply) * BigInt(10) ** BigInt(18);
-      const amountETH = BigInt(Math.floor(Number(submittedData.launchConfig.initialEthAmount) * 1e18));
-        
+  
+      const amountToken =
+        BigInt(submittedData.deploymentConfig.initialSupply) *
+        BigInt(10) ** BigInt(18);
+  
+      const amountETH = BigInt(
+        Math.floor(Number(submittedData.launchConfig.initialEthAmount) * 1e18)
+      );
+  
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
   
       console.log("===== ADD LIQUIDITY START =====");
   
       // =========================
-      // 1. Check balance & allowance
+      // 1. ERC20 ABI
       // =========================
       const erc20Abi = [
         {
@@ -180,22 +186,23 @@ export default function LaunchPage() {
           outputs: [{ type: "bool" }],
         },
       ];
-
-      console.log("tokenAddress:", tokenAddress)
   
-      const balance = await publicClient.readContract({
+      // =========================
+      // 2. Check balance & allowance
+      // =========================
+      const balance = (await publicClient.readContract({
         address: tokenAddress,
         abi: erc20Abi,
         functionName: "balanceOf",
         args: [address],
-      }) as bigint;
+      })) as bigint;
   
-      const allowance = await publicClient.readContract({
+      const allowance = (await publicClient.readContract({
         address: tokenAddress,
         abi: erc20Abi,
         functionName: "allowance",
         args: [address, routerAddress],
-      }) as bigint;
+      })) as bigint;
   
       console.log("Balance:", balance.toString());
       console.log("Allowance:", allowance.toString());
@@ -205,11 +212,11 @@ export default function LaunchPage() {
       }
   
       // =========================
-      // 2. Approve
+      // 3. Approve
       // =========================
       if (allowance < amountToken) {
         setLiquidityStatus("approving");
-        console.log("APPROVE token:", tokenAddress)
+  
         const approveHash = await walletClient.writeContract({
           address: tokenAddress,
           abi: erc20Abi,
@@ -217,42 +224,85 @@ export default function LaunchPage() {
           args: [routerAddress, amountToken],
           account: address,
         });
-        console.log("APPROVE token:", tokenAddress)
   
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
   
-        console.log("Approve done:", approveHash);
+        console.log("Approve done");
       }
-
-      console.log("Final allowance:",
-        await publicClient.readContract({
-          address: tokenAddress,
-          abi: erc20Abi,
-          functionName: "allowance",
-          args: [address, routerAddress],
-        })
-      );
-
-      const routerWETH = await publicClient.readContract({
-        address: routerAddress,
-        abi: [{
-          name: "weth",
-          type: "function",
-          stateMutability: "view",
-          inputs: [],
-          outputs: [{ type: "address" }]
-        }],
-        functionName: "weth",
-      });
-      
-      console.log("Router WETH:", routerWETH);
-      console.log("Deployment WETH:", wethAddress);
   
       // =========================
-      // 3. Simulate
+      // 4. Ensure Pool Exists（核心修复）
       // =========================
-      await new Promise(r => setTimeout(r, 1500));
+      const factoryAbi = [
+        {
+          name: "getPool",
+          type: "function",
+          inputs: [
+            { name: "tokenA", type: "address" },
+            { name: "tokenB", type: "address" },
+            { name: "stable", type: "bool" },
+          ],
+          outputs: [{ type: "address" }],
+          stateMutability: "view",
+        },
+        {
+          name: "createPool",
+          type: "function",
+          inputs: [
+            { name: "tokenA", type: "address" },
+            { name: "tokenB", type: "address" },
+            { name: "stable", type: "bool" },
+          ],
+          outputs: [{ type: "address" }],
+          stateMutability: "nonpayable",
+        },
+      ];
 
+      const [token0, token1] = [tokenAddress, wethAddress].sort((a, b) =>
+        a.toLowerCase() < b.toLowerCase() ? -1 : 1
+      );
+  
+      let pool = (await publicClient.readContract({
+        address: factoryAddress,
+        abi: factoryAbi,
+        functionName: "getPool",
+        args: [token0, token1, false], 
+      })) as `0x${string}`;
+  
+      console.log("Pool before:", pool);
+  
+      if (pool === "0x0000000000000000000000000000000000000000") {
+        console.log("Creating pool...");
+  
+        const hash = await walletClient.writeContract({
+          address: factoryAddress,
+          abi: factoryAbi,
+          functionName: "createPool",
+          args: [tokenAddress, wethAddress, false],
+          account: address,
+        });
+  
+        await publicClient.waitForTransactionReceipt({ hash });
+  
+        console.log("Pool created");
+  
+        pool = (await publicClient.readContract({
+          address: factoryAddress,
+          abi: factoryAbi,
+          functionName: "getPool",
+          args: [token0, token1, false],
+        })) as `0x${string}`;
+      }
+  
+      console.log("Pool after:", pool);
+  
+      if (!pool || pool === "0x0000000000000000000000000000000000000000") {
+        throw new Error("Pool creation failed");
+      }
+  
+      // =========================
+      // 5. Add Liquidity
+      // =========================
       const routerAbi = [
         {
           name: "addLiquidityETH",
@@ -270,37 +320,14 @@ export default function LaunchPage() {
           outputs: [
             { name: "amountToken", type: "uint256" },
             { name: "amountETH", type: "uint256" },
-            { name: "liquidity", type: "uint256" }
-          ]
+            { name: "liquidity", type: "uint256" },
+          ],
         },
       ];
   
-      await publicClient.simulateContract({
-        address: routerAddress,
-        abi: routerAbi,
-        functionName: "addLiquidityETH",
-        args: [
-          tokenAddress,
-          false,
-          amountToken,
-          0,
-          0,
-          address,
-          deadline,
-        ],
-        value: amountETH,
-        account: address,
-      });
-  
-      console.log("Simulation passed");
-  
-      // =========================
-      // 4. Add Liquidity
-      // =========================
       setLiquidityStatus("adding");
-      console.log("ADD token:", tokenAddress)
   
-      const hash = await walletClient.writeContract({
+      const txHash = await walletClient.writeContract({
         address: routerAddress,
         abi: routerAbi,
         functionName: "addLiquidityETH",
@@ -316,68 +343,15 @@ export default function LaunchPage() {
         value: amountETH,
         account: address,
       });
-
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-
-      console.log("tx status:", receipt.status);
-      console.log("tx logs count:", receipt.logs.length);
-
-      if (receipt.status === "reverted") {
-        throw new Error("Add liquidity transaction reverted. Pool was not created.");
-      }
-
+  
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
   
       console.log("Liquidity added");
   
       // =========================
-      // 5. Get Pool
+      // 6. LP Balance
       // =========================
-      const factoryAbi = [
-        {
-          name: "getPool",
-          type: "function",
-          inputs: [
-            { name: "tokenA", type: "address" },
-            { name: "tokenB", type: "address" },
-            { name: "stable", type: "bool" },
-          ],
-          outputs: [{ type: "address" }],
-          stateMutability: "view",
-        },
-      ];
-  
-      const [token0, token1] = [tokenAddress, wethAddress].sort((a, b) =>
-        a.toLowerCase() < b.toLowerCase() ? -1 : 1
-      );
-      
-      const pool = await publicClient.readContract({
-        address: factoryAddress,
-        abi: factoryAbi,
-        functionName: "getPool",
-        args: [token0, token1, false],
-      }) as `0x${string}`;
-
-      console.log("token0:", token0);
-      console.log("token1:", token1);
-      console.log("factoryAddress:", factoryAddress);
-      console.log("wethAddress:", wethAddress);
-      console.log("Pool:", pool);
-
-      if (!pool || pool === "0x0000000000000000000000000000000000000000") {
-        throw new Error(`Pool not found. Check factory and token addresses. token0=${token0}, token1=${token1}`);
-      }
-  
-      console.log("Pool:", pool);
-  
-      setPoolAddress(pool as string);
-
-  
-      // =========================
-      // 6. LP balance
-      // =========================
-      console.log("account address", address);
-      const lp = await publicClient.readContract({
+      const lp = (await publicClient.readContract({
         address: pool,
         abi: [
           {
@@ -390,10 +364,11 @@ export default function LaunchPage() {
         ],
         functionName: "balanceOf",
         args: [address],
-      }) as bigint;
+      })) as bigint;
   
       console.log("LP Balance:", lp.toString());
   
+      setPoolAddress(pool);
       setLpBalance(lp.toString());
   
       setLiquidityStatus("success");
