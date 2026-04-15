@@ -30,5 +30,11 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
 , "hardhat.config.js"  ],
-  "exclude": ["node_modules", "ignition"]
+  "exclude": [
+    "node_modules",
+    "ignition",
+    "test",
+    "scripts",
+    "artifacts",
+    "cache"]
 }
