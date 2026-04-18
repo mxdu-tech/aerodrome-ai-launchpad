@@ -361,20 +361,28 @@ export default function LaunchPage() {
       // =========================
       // 6. LP Balance
       // =========================
-      const lp = (await publicClient.readContract({
-        address: pool,
-        abi: [
-          {
+
+      await new Promise(r => setTimeout(r, 2000));
+
+      let lp = BigInt(0);
+      for (let i = 0; i < 3; i++) {
+        lp = (await publicClient.readContract({
+          address: pool,
+          abi: [{
             name: "balanceOf",
             type: "function",
             inputs: [{ name: "account", type: "address" }],
             outputs: [{ type: "uint256" }],
             stateMutability: "view",
-          },
-        ],
-        functionName: "balanceOf",
-        args: [address],
-      })) as bigint;
+          }],
+          functionName: "balanceOf",
+          args: [address],
+        })) as bigint;
+
+        if (lp > BigInt(0)) break;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
   
       console.log("LP Balance:", lp.toString());
   
@@ -572,42 +580,35 @@ export default function LaunchPage() {
   }
 
   function getStepStyle(step: number) {
-    if (status === "idle") {
+    // Step 1: 部署 token，看 status
+    if (step === 1) {
+      if (status === "validating" || status === "deploying") return "border-yellow-500/40 bg-yellow-500/10";
+      if (status === "ready" || status === "deployed") return "border-emerald-500/40 bg-emerald-500/10";
+      if (status === "failed") return "border-red-500/40 bg-red-500/10";
       return "border-white/10 bg-black/30";
     }
   
-    if (status === "validating") {
-      if (step === 1) {
-        return "border-yellow-500/40 bg-yellow-500/10";
-      }
+    // Step 2: Approve，看 liquidityStatus
+    if (step === 2) {
+      if (status !== "deployed") return "border-white/10 bg-black/30";
+      if (liquidityStatus === "approving") return "border-yellow-500/40 bg-yellow-500/10";
+      if (["adding", "success"].includes(liquidityStatus)) return "border-emerald-500/40 bg-emerald-500/10";
+      if (liquidityStatus === "error") return "border-red-500/40 bg-red-500/10";
       return "border-white/10 bg-black/30";
     }
   
-    if (status === "ready") {
-      if (step === 1) {
-        return "border-emerald-500/40 bg-emerald-500/10";
-      }
+    // Step 3: Add Liquidity
+    if (step === 3) {
+      if (liquidityStatus === "adding") return "border-yellow-500/40 bg-yellow-500/10";
+      if (liquidityStatus === "success") return "border-emerald-500/40 bg-emerald-500/10";
+      if (liquidityStatus === "error") return "border-red-500/40 bg-red-500/10";
       return "border-white/10 bg-black/30";
     }
   
-    if (status === "deploying") {
-      if (step === 1) {
-        return "border-yellow-500/40 bg-yellow-500/10";
-      }
-      return "border-white/10 bg-black/30";
-    }
-  
-    if (status === "deployed") {
-      if (step === 1) {
-        return "border-emerald-500/40 bg-emerald-500/10";
-      }
-      return "border-white/10 bg-black/30";
-    }
-  
-    if (status === "failed") {
-      if (step === 1) {
-        return "border-red-500/40 bg-red-500/10";
-      }
+    // Step 4: Show Result
+    if (step === 4) {
+      if (liquidityStatus === "success") return "border-emerald-500/40 bg-emerald-500/10";
+      if (liquidityStatus === "error") return "border-red-500/40 bg-red-500/10";
       return "border-white/10 bg-black/30";
     }
   
