@@ -63,6 +63,16 @@ export default function TradePage() {
       ],
       outputs: [{ type: "bool" }],
     },
+    {
+      name: "allowance",      
+      type: "function",
+      stateMutability: "view",
+      inputs: [
+        { name: "owner", type: "address" },
+        { name: "spender", type: "address" },
+      ],
+      outputs: [{ type: "uint256" }],
+    },
   ] as const;
 
   const routerAbi = [
@@ -478,7 +488,6 @@ export default function TradePage() {
 
       const routes = getRoutes();
     
-
       let hash: `0x${string}`;
 
       if (mode !== "buy") {
@@ -502,14 +511,36 @@ export default function TradePage() {
           setStatus(`Insufficient balance: you have ${formatEther(balance)} tokens`);
           return;
         }
-        const approveHash = await walletClient.writeContract({
+        const allowance = await publicClient.readContract({
           address: tokenA as `0x${string}`,
           abi: erc20Abi,
-          functionName: "approve",
-          args: [routerAddress, amount],
-          account: address,
-        });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+          functionName: "allowance",
+          args: [address, routerAddress],
+        }) as bigint;
+        
+        if (allowance < amount) {
+          const approveHash = await walletClient.writeContract({
+            address: tokenA as `0x${string}`,
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [routerAddress, amount],
+            account: address,
+          });
+          await publicClient.waitForTransactionReceipt({ hash: approveHash });
+
+          let retries = 0;
+          while (retries < 10) {
+            const newAllowance = await publicClient.readContract({
+              address: tokenA as `0x${string}`,
+              abi: erc20Abi,
+              functionName: "allowance",
+              args: [address, routerAddress],
+            }) as bigint;
+            if (newAllowance >= amount) break;
+            await new Promise(r => setTimeout(r, 500));
+            retries++;
+          }
+        }
       }
   
       if (mode === "buy") {
@@ -600,7 +631,7 @@ export default function TradePage() {
 
         {/* Token inputs */}
         <input
-          placeholder="Token address"
+          placeholder="Token A address"
           value={tokenA}
           onChange={(e) => setTokenA(e.target.value)}
           className="w-full mb-2 px-3 py-2 bg-[#1a2235] rounded"
