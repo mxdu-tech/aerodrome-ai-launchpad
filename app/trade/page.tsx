@@ -413,15 +413,25 @@ export default function TradePage() {
             wethAddress,
             amountFloat
           );
+
+          const amounts = await publicClient.readContract({
+            address: routerAddress,
+            abi: routerAbi,
+            functionName: "getAmountsOut",
+            args: [
+              parseEther(amountIn),
+              [{ from: tokenA as `0x${string}`, to: wethAddress, stable: false, factory: factoryAddress }],
+            ],
+          }) as bigint[];
   
     
-          const midAmount = quoteFloat;
+          const midAmountWeth = Number(formatEther(amounts[amounts.length - 1]));
   
           // hop2: WETH → tokenB
           const impact2 = await getImpact(
             wethAddress,
             tokenB as `0x${string}`,
-            midAmount
+            midAmountWeth
           );
   
           impact = impact1 + impact2;
@@ -443,11 +453,18 @@ export default function TradePage() {
   async function handleSwap() {
     try {
       if (!walletClient || !publicClient || !address) {
-        throw new Error("Wallet not ready");
+        setStatus("Wallet not ready");
+        return;
       }
-
+  
       if (slippage < 0 || slippage >= 100) {
-        throw new Error("Slippage must be between 0 and 100");
+        setStatus("Slippage must be between 0 and 100");
+        return;
+      }
+  
+      if (!amountIn || quote === BigInt(0)) {
+        setStatus("Enter an amount first");
+        return;
       }
 
       const amount = parseEther(amountIn);
@@ -465,6 +482,26 @@ export default function TradePage() {
       let hash: `0x${string}`;
 
       if (mode !== "buy") {
+        const balance = await publicClient.readContract({
+          address: tokenA as `0x${string}`,
+          abi: [{
+            name: "balanceOf",
+            type: "function",
+            inputs: [{ name: "account", type: "address" }],
+            outputs: [{ type: "uint256" }],
+            stateMutability: "view",
+          }],
+          functionName: "balanceOf",
+          args: [address],
+        }) as bigint;
+  
+        console.log("Token balance:", formatEther(balance));
+        console.log("Amount in:", formatEther(amount));
+  
+        if (balance < amount) {
+          setStatus(`Insufficient balance: you have ${formatEther(balance)} tokens`);
+          return;
+        }
         const approveHash = await walletClient.writeContract({
           address: tokenA as `0x${string}`,
           abi: erc20Abi,
@@ -476,6 +513,11 @@ export default function TradePage() {
       }
   
       if (mode === "buy") {
+        const ethBalance = await publicClient.getBalance({ address });
+        if (ethBalance < amount) {
+          setStatus(`Insufficient ETH: you have ${formatEther(ethBalance)} ETH`);
+          return;
+        }
         hash = await walletClient.writeContract({
           address: routerAddress,
           abi: routerAbi,

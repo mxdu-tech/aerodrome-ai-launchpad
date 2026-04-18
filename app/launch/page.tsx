@@ -45,6 +45,7 @@ export default function LaunchPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<LaunchStatus>("idle");
+  const [mounted, setMounted] = useState(false);
   
   console.log("=== RENDER ===");
   
@@ -61,6 +62,8 @@ export default function LaunchPage() {
   }>(null);
 
   const deployButtonState = getDeployButtonState();
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     if (!walletClient) return;
@@ -273,25 +276,32 @@ export default function LaunchPage() {
   
       if (pool === "0x0000000000000000000000000000000000000000") {
         console.log("Creating pool...");
-  
+      
         const hash = await walletClient.writeContract({
           address: factoryAddress,
           abi: factoryAbi,
           functionName: "createPool",
-          args: [tokenAddress, wethAddress, false],
+          args: [token0, token1, false],
           account: address,
         });
-  
-        await publicClient.waitForTransactionReceipt({ hash });
-  
-        console.log("Pool created");
-  
-        pool = (await publicClient.readContract({
-          address: factoryAddress,
-          abi: factoryAbi,
-          functionName: "getPool",
-          args: [token0, token1, false],
-        })) as `0x${string}`;
+      
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        const poolFromData = `0x${receipt.logs[0].data.slice(26, 66)}` as `0x${string}`;
+
+        console.log("Pool from data:", poolFromData);
+    
+        if (poolFromData && poolFromData !== "0x0000000000000000000000000000000000000000") {
+          pool = poolFromData;
+          console.log("Pool from data:", pool);
+        } else {
+
+          pool = (await publicClient.readContract({
+            address: factoryAddress,
+            abi: factoryAbi,
+            functionName: "getPool",
+            args: [token0, token1, false],
+          })) as `0x${string}`;
+        }
       }
   
       console.log("Pool after:", pool);
@@ -732,10 +742,10 @@ export default function LaunchPage() {
               <button
               type="button"
               onClick={handleDeployToken}
-              disabled={deployButtonState.disabled}
+              disabled={!mounted || deployButtonState.disabled}
               className="w-full rounded-xl border border-white/20 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
               >
-              {deployButtonState.label}
+              {mounted ? deployButtonState.label : "Loading..."}
               </button>
               {status === "deployed" && (
                 <button
